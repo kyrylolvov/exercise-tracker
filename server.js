@@ -23,30 +23,44 @@ app.use(
 // Defining USER model
 const Schema = mongoose.Schema;
 
-const userSchema = new Schema({
-  username: String,
-});
-const USER = mongoose.model('USER', userSchema);
-
-const exerciseSchema = new Schema({
-  username: String,
-  description: String,
-  duration: Number,
+const exerciseSchema = new mongoose.Schema({
+  description: { type: String, required: true },
+  duration: { type: Number, required: true },
   date: Date,
 });
-const EXERCISE = mongoose.model('EXERCISE', exerciseSchema);
+
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true },
+  log: [exerciseSchema],
+});
+
+const User = mongoose.model('User', userSchema);
+const Exercise = mongoose.model('Exercise', exerciseSchema);
 
 app.use(cors());
 app.use(express.static('public'));
+
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html');
+});
+
+app.get('/api/users', (req, res) => {
+  User.find({}, (error, arrayOfUsers) => {
+    if (!error) {
+      res.json(arrayOfUsers);
+    } else {
+      res.status(500).json({
+        error: 'Server error',
+      });
+    }
+  });
 });
 
 app.post('/api/users', async function (req, res) {
   const { username } = req.body;
   if (username.length > 0) {
     try {
-      const newUser = new USER({
+      const newUser = new User({
         username: username,
       });
       await newUser.save();
@@ -76,22 +90,26 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
           if (+duration > 0) {
             if (!!date && dateRegex.test(date)) {
               try {
-                const userFound = await USER.findOne({
-                  _id: id,
-                });
-                const newExercise = new EXERCISE({
-                  username: userFound.username,
+                const newExercise = new Exercise({
                   description: description,
                   duration: +duration,
                   date: date,
                 });
-                await newExercise.save();
-                res.json({
-                  _id: newExercise._id.toString(),
-                  username: newExercise.username,
-                  description: newExercise.description,
-                  duration: newExercise.duration,
-                  date: newExercise.date.toDateString(),
+
+                User.findByIdAndUpdate(id, { $push: { log: newExercise } }, { new: true }, (error, updatedUser) => {
+                  if (!error) {
+                    let responseObject = {};
+                    responseObject['_id'] = updatedUser.id;
+                    responseObject['username'] = updatedUser.username;
+                    responseObject['description'] = newExercise.description;
+                    responseObject['duration'] = newExercise.duration;
+                    responseObject['date'] = new Date(newExercise.date).toDateString();
+                    res.json(responseObject);
+                  } else {
+                    res.status(500).json({
+                      error: 'Error',
+                    });
+                  }
                 });
               } catch (err) {
                 console.log(err);
@@ -117,6 +135,23 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
   } else {
     res.json({ error: 'Id cannot be empty' });
   }
+});
+
+app.get('/api/users/:_id/logs', (req, res) => {
+  const id = req.params._id;
+
+  User.findById(id, function (err, user) {
+    if (err) {
+      console.log(err);
+    } else {
+      res.status(200).json({
+        username: user.username,
+        count: user.log.length,
+        _id: user._id.toString(),
+        log: user.log,
+      });
+    }
+  });
 });
 
 const listener = app.listen(process.env.PORT || 3000, () => {
