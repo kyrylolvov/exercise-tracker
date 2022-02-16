@@ -1,155 +1,111 @@
 require('dotenv').config();
 const express = require('express');
-const mongo = require('mongo');
-const mongoose = require('mongoose');
-const bodyParser = require('body-parser');
-const cors = require('cors');
 const app = express();
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const mongodb = require('mongodb');
 
-const dateRegex = /\d{4}-\d{2}-\d{2}/;
-
-// Connecting to MongoDB database
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
-
-app.use(
-  bodyParser.urlencoded({
-    extended: false,
-  }),
+const mongoose = require('mongoose');
+const { Schema } = mongoose;
+mongoose.connect(
+  process.env.MONGO_URI || 'mongodb://localhost/exercise-track',
+  { useNewUrlParser: true },
+  { useUnifiedTopology: true },
 );
 
-// Defining USER model
-const Schema = mongoose.Schema;
+const personSchema = new Schema({ username: String });
+const Person = mongoose.model('Person', personSchema);
 
-const exerciseSchema = new mongoose.Schema({
-  description: { type: String, required: true },
-  duration: { type: Number, required: true },
-  date: Date,
-});
-
-const userSchema = new mongoose.Schema({
-  username: { type: String, required: true },
-  log: [exerciseSchema],
-});
-
-const User = mongoose.model('User', userSchema);
+const exerciseSchema = new Schema({ userId: String, description: String, duration: Number, date: Date });
 const Exercise = mongoose.model('Exercise', exerciseSchema);
+
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
 
 app.use(cors());
 app.use(express.static('public'));
-
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html');
 });
 
-app.get('/api/users', (req, res) => {
-  User.find({}, (error, arrayOfUsers) => {
-    if (!error) {
-      res.json(arrayOfUsers);
+app.post('/api/users', (req, res) => {
+  const newPerson = new Person({ username: req.body.username });
+  newPerson.save((err, data) => {
+    res.json({ username: data.username, _id: data.id });
+  });
+});
+
+app.post('/api/users/:_id/exercises', (req, res) => {
+  const userId = req.params._id;
+  let { description, duration, date } = req.body;
+  if (!date) {
+    date = new Date().toDateString();
+  } else {
+    date = new Date(date).toDateString();
+  }
+
+  Person.findById(userId, (err, data) => {
+    if (!data) {
+      res.send('Unknown userId');
     } else {
-      res.status(500).json({
-        error: 'Server error',
+      let username = data.username;
+      let newExercise = new Exercise({ userId, description, duration, date });
+
+      newExercise.save((err, data) => {
+        res.json({ username, description, duration: +duration, date: new Date(date).toDateString(), _id: userId });
       });
     }
   });
 });
 
-app.post('/api/users', async function (req, res) {
-  const { username } = req.body;
-  if (username.length > 0) {
-    try {
-      const newUser = new User({
-        username: username,
-      });
-      await newUser.save();
-      res.json({
-        username: newUser.username,
-        _id: newUser._id.toString(),
-      });
-    } catch (err) {
-      console.log(err);
-      res.status(500).json({
-        error: 'Server error',
-      });
-    }
-  } else {
-    res.json({ error: 'Name cannot be empty' });
-  }
-});
-
-app.post('/api/users/:_id/exercises', async function (req, res) {
-  const id = req.params._id;
-  const { description, duration, date } = req.body;
-
-  if (id.length > 0) {
-    if (description.length > 0) {
-      if (duration.length > 0) {
-        if (!isNaN(duration)) {
-          if (+duration > 0) {
-            if (!!date && dateRegex.test(date)) {
-              try {
-                const newExercise = new Exercise({
-                  description: description,
-                  duration: +duration,
-                  date: date,
-                });
-
-                User.findByIdAndUpdate(id, { $push: { log: newExercise } }, { new: true }, (error, updatedUser) => {
-                  if (!error) {
-                    let responseObject = {};
-                    responseObject['_id'] = updatedUser.id;
-                    responseObject['username'] = updatedUser.username;
-                    responseObject['description'] = newExercise.description;
-                    responseObject['duration'] = newExercise.duration;
-                    responseObject['date'] = new Date(newExercise.date).toDateString();
-                    res.json(responseObject);
-                  } else {
-                    res.status(500).json({
-                      error: 'Error',
-                    });
-                  }
-                });
-              } catch (err) {
-                console.log(err);
-                res.status(500).json({
-                  error: 'User not found',
-                });
-              }
-            } else {
-              res.json({ error: 'Invalid date' });
-            }
-          } else {
-            res.json({ error: 'Duration cannot be zero' });
-          }
-        } else {
-          res.json({ error: 'Duration must be a number' });
-        }
-      } else {
-        res.json({ error: 'Duration cannot be empty' });
-      }
+app.get('/api/users', (req, res) => {
+  Person.find({}, (err, data) => {
+    if (!data) {
+      res.json('No data');
     } else {
-      res.json({ error: 'Description cannot be empty' });
+      res.json(data);
     }
-  } else {
-    res.json({ error: 'Id cannot be empty' });
-  }
+  });
 });
 
 app.get('/api/users/:_id/logs', (req, res) => {
-  const id = req.params._id;
+  const { from, to, limit } = req.query;
+  let userId = req.params._id;
 
-  User.findById(id, function (err, user) {
-    if (err) {
-      console.log(err);
+  Person.findById(userId, (err, data) => {
+    if (!data) {
+      res.json({ 'Error userId': userId });
     } else {
-      res.status(200).json({
-        username: user.username,
-        count: user.log.length,
-        _id: user._id.toString(),
-        log: user.log,
-      });
+      const username = data.username;
+      Exercise.find({ userId }, { date: { $gte: new Date(from), $lte: new Date(to) } })
+        .select(['username', 'description', 'duration', 'date'])
+        .limit(+limit)
+        .exec((err, data) => {
+          const customdata = data.map((exer) => {
+            return {
+              description: exer.description,
+              duration: +exer.duration,
+              date: new Date(exer.date).toDateString(),
+            };
+          });
+          if (!data) {
+            res.json({
+              username: username,
+              count: customdata.length,
+              _id: userId,
+              log: [],
+            });
+          } else {
+            res.json({
+              username: username,
+              count: customdata.length,
+              _id: userId,
+              from: new Date(from).toDateString(),
+              to: new Date(to).toDateString(),
+              log: customdata,
+            });
+          }
+        });
     }
   });
 });
